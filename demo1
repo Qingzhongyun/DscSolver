@@ -1,0 +1,117 @@
+# -*- encoding: utf-8 -*-
+"""
+version:1.0.0230316_release
+"""
+
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy.integrate import odeint
+from timeout_decorator import timeout, TimeoutError
+
+class DSCSolver:
+    def __init__(self, params = None):        
+        self.params = {
+            'static_config': {
+                'R': 8.314,
+                'k': 10/60,
+                'T_0': 300,
+                'c_0': 0,
+                'c_alpha_0': 1,
+                't_start': 0,
+                't_end': 50*60,
+                'num_points': 1000,
+            },
+            'kinetics_config': {
+                'A_alpha': 7.1e22,
+                'Ea_alpha': 2.58e5,
+                'n_alpha': 3.4,
+                'deltaH_alpha': 52,
+            }
+        }
+
+        if params is not None:
+            self.set_params(params)
+        
+        self.t = np.linspace(self.params['static_config']['t_start'],
+                             self.params['static_config']['t_end'],
+                             self.params['static_config']['num_points'])
+        self.R = self.params['static_config']['R']
+        self.k = self.params['static_config']['k']
+        self.T_0 = self.params['static_config']['T_0']
+        self.c_0 = self.params['static_config']['c_0']
+        self.c_alpha_0 = self.params['static_config']['c_alpha_0']
+        self.A_alpha = self.params['kinetics_config']['A_alpha']
+        self.Ea_alpha = self.params['kinetics_config']['Ea_alpha']
+        self.n_alpha = self.params['kinetics_config']['n_alpha']
+        self.deltaH_alpha = self.params['kinetics_config']['deltaH_alpha']
+        
+    def set_params(self, params):
+        for (key, value) in params.items():
+            for (k, v) in params[ key ].items():
+                self.params[ key ][ k ] = v
+
+    # 使用内置的update（），是不是更快一点
+    # def set_params(self, params):
+    #     for key in params.keys():
+    #         if key not in self.params:
+    #             raise ValueError(f"Invalid parameter group '{key}'")
+    #     self.params.update(params)
+
+
+    def diff_eqn(self, c, t):
+        c_alpha = self.c_alpha_0 - c
+        dc_dt = self.A_alpha * np.multiply(np.exp(-self.Ea_alpha / 
+                    (self.R * (self.T_0 + self.k * t))), c_alpha ** self.n_alpha)
+        return dc_dt
+
+    # 这里的self.T_0 + self.k * t一项难以理解
+    # 这里用了浓度，没有用转换率，参数是不是就变化了，标准的应该是什么？
+
+
+    # 这里的P_a是一个产热功率表？
+    # odeint接受一个微分方程
+    # 
+    @timeout(10)
+    def solve(self):
+        try:
+            # c, info = odeint(self.diff_eqn, self.c_0, self.t, full_output=True)
+            c = odeint(self.diff_eqn, self.c_0, self.t)
+        except TimeoutError:
+            c = None
+
+        if c is not None:
+            f_alpha = (self.c_alpha_0 - c) ** self.n_alpha
+            dc_dt = self.A_alpha * np.multiply(np.exp(-self.Ea_alpha / 
+                      (self.R * (self.T_0 + self.k * self.t))), f_alpha.flatten())
+            P_alpha = self.deltaH_alpha * dc_dt
+        else:
+            P_alpha = None
+
+        timestamp = np.array(self.t, dtype=float)
+        return timestamp, P_alpha
+
+
+if __name__ == "__main__":
+    params = {
+        'static_config': {
+            'k': 10/60,
+            'T_0': 300,
+        },
+        'kinetics_config': {
+            'A_alpha': 7.1e22,
+            'Ea_alpha': 2.75e5,
+            'n_alpha': 4.9,
+            'deltaH_alpha': 101,
+        }
+    }
+    solver = DSCSolver(params)
+    try:
+        timestamp, P_alpha = solver.solve()
+        # plt.plot(timestamp, P_alpha)
+        plt.plot(P_alpha)
+        plt.xlabel('Temperature ($^\circ$C)')
+        plt.ylabel('Heat Flow (W g $^{-1}$)')
+        plt.show()
+    except TimeoutError:
+        print("Timeout reached. Calculation terminated.")
+        
